@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LinnemanLabs Certificate Practice Statement</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+</head>
+
+<body>
+  <h1>LinnemanLabs Certificate Practice Statement</h1>
+  <p>OID: 1.3.6.1.4.1.65302.1.1</p>
+
+  <h2>1. CA Overview</h2>
+  <p>LinnemanLabs operates a private PKI rooted to an offline ECDSA P-384 key stored on hardware security tokens
+    (YubiKey). The root CA issues intermediate certificates for specific trust functions.</p>
+
+  <h2>2. Certificate Hierarchy</h2>
+  <ul>
+    <li><strong>Root CA</strong> - Offline, YubiKey-resident, 10-year validity</li>
+    <li><strong>Fulcio CA</strong> - Code signing certificate issuance, KMS-backed, 3-year validity</li>
+    <li><strong>SPIRE CA</strong> - Workload identity (SVID) issuance, KMS-backed, 3-year validity</li>
+    <li><strong>TSA</strong> - RFC 3161 timestamp authority, KMS-backed, 3-year validity</li>
+  </ul>
+
+  <h2>3. Key Management</h2>
+  <p>Root CA private key generated on air-gapped system, stored on hardware security token (YubiKey), duplicate backup
+    stored in separate physical location. Private key never exists on networked systems.</p>
+  <p>Fulcio and TSA intermediate CA private keys are non-exportable in AWS KMS. All signing operations occur via KMS API
+    calls.</p>
+  <p>SPIRE upstream CA private key is stored in AWS Secrets Manager with IAM access controls and CloudTrail audit
+    logging. SPIRE operational signing keys are non-exportable in AWS KMS.</p>
+
+  <h2>4. Certificate Lifecycle</h2>
+  <p>Root CA: 10 years. Intermediates: 3 years. Fulcio signing certs: 10 minutes. SPIRE SVIDs: 1 hour. TSA timestamps:
+    per-request.</p>
+
+  <h2>5. Transparency</h2>
+  <p>Fulcio certificates are logged to a private Certificate Transparency log (TesseraCT). Signing events are logged to
+    a private transparency log (Rekor). Trust material is published at <a
+      href="/.well-known/trusted_root.json">/.well-known/trusted_root.json</a>.</p>
+
+  <h2>6. Contact</h2>
+  <p>Keith Linneman - keith@linnemanlabs.com</p>
+</body>
+
+</html>

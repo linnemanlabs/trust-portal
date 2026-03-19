@@ -1,0 +1,406 @@
+// trust-portal - LinnemanLabs Trust Portal - public trust material, CA certificates, Sigstore trusted root for trust.linnemanlabs.com
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	otelpyroscope "github.com/grafana/otel-profiling-go"
+	"github.com/linnemanlabs/go-core/cfg"
+	"github.com/linnemanlabs/go-core/opshttp"
+	"github.com/linnemanlabs/go-core/prof"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+
+	"github.com/linnemanlabs/go-core/health"
+
+	"github.com/linnemanlabs/go-core/httpmw"
+	"github.com/linnemanlabs/go-core/httpserver"
+
+	"github.com/linnemanlabs/go-core/log"
+
+	"github.com/linnemanlabs/go-core/metrics"
+	"github.com/linnemanlabs/go-core/otelx"
+	v "github.com/linnemanlabs/go-core/version"
+
+	vc "github.com/linnemanlabs/trust-portal/internal/cfg"
+	"github.com/linnemanlabs/trust-portal/internal/trustportal"
+)
+
+const appName = "trust-portal"
+const component = "server"
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "fatal error:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Set app name and component
+	v.AppName = appName
+	v.Component = component
+
+	// Get build/version info
+	vi := v.Get()
+
+	// each package registers its own flags and options struct
+	var (
+		appCfg    vc.Config
+		httpCfg   httpserver.Config
+		httpmwCfg httpmw.Config
+		logCfg    log.Config
+		opsCfg    opshttp.Config
+		profCfg   prof.Config
+		traceCfg  otelx.Config
+	)
+
+	// register flags for each package, which will be parsed into the shared config struct
+	appCfg.RegisterFlags(flag.CommandLine)
+	httpCfg.RegisterFlags(flag.CommandLine)
+	httpmwCfg.RegisterFlags(flag.CommandLine)
+	logCfg.RegisterFlags(flag.CommandLine)
+	opsCfg.RegisterFlags(flag.CommandLine)
+	profCfg.RegisterFlags(flag.CommandLine)
+	traceCfg.RegisterFlags(flag.CommandLine)
+	var showVersion bool
+	flag.BoolVar(&showVersion, "V", false, "Print version+build information and exit")
+
+	// parse flags to get config values from cmdline, we check env vars next which do not override cmdline flags
+	flag.Parse()
+	if showVersion {
+		fmt.Printf(
+			"%s (%s) %s (commit=%s, commit_date=%s, build_id=%s, build_date=%s, go=%s, dirty=%v)\n",
+			vi.AppName, vi.Component, vi.Version, vi.Commit, vi.CommitDate, vi.BuildId, vi.BuildDate, vi.GoVersion,
+			vi.VCSDirty != nil && *vi.VCSDirty,
+		)
+		return nil
+	}
+
+	// Fill in config values from environment variables with prefix TRUSTPORTAL_,
+	// these do not override cmdline flags
+	cfg.FillFromEnv(flag.CommandLine, "TRUSTPORTAL_", func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, format+"\n", args...)
+	})
+
+	if err := errors.Join(
+		appCfg.Validate(),
+		httpCfg.Validate(),
+		httpmwCfg.Validate(),
+		logCfg.Validate(),
+		opsCfg.Validate(),
+		profCfg.Validate(),
+		traceCfg.Validate(),
+	); err != nil {
+		return fmt.Errorf("configuration validation failed: %w", err)
+	}
+
+	// cross-cutting checks that only main can validate
+	if appCfg.HTTPPort == opsCfg.Port {
+		return fmt.Errorf("http and admin ports must differ (both %d)", appCfg.HTTPPort)
+	}
+
+	// initialize logger early
+	lg, err := log.New(logCfg.ToOptions(v.AppName))
+	if err != nil {
+		return fmt.Errorf("logger init: %w", err)
+	}
+	// no-op for slog/stderr, but here if we swap backends in the future to ensure any buffered logs are flushed on shutdown
+	defer func() { _ = lg.Sync() }()
+
+	// create a logger with component field pre-filled for structured logging in this package
+	L := lg.With("component", vi.Component)
+
+	// add logger to context
+	ctx = log.WithContext(ctx, L)
+
+	L.Info(ctx, "initializing application",
+		"version", vi.Version,
+		"commit", vi.Commit,
+		"commit_date", vi.CommitDate,
+		"build_id", vi.BuildId,
+		"build_date", vi.BuildDate,
+		"go_version", vi.GoVersion,
+		"vcs_dirty", vi.VCSDirty,
+		"http_port", appCfg.HTTPPort,
+		"admin_port", opsCfg.Port,
+		"enable_pprof", opsCfg.EnablePprof,
+		"enable_pyroscope", profCfg.EnablePyroscope,
+		"enable_tracing", traceCfg.EnableTracing,
+		"trace_sample", traceCfg.TraceSample,
+		"trace_insecure", traceCfg.Insecure,
+		"otlp_endpoint", traceCfg.OTLPEndpoint,
+		"pyro_server", profCfg.PyroServer,
+		"pyro_tenant", profCfg.PyroTenantID,
+		"include_error_links", logCfg.IncludeErrorLinks,
+		"max_error_links", logCfg.MaxErrorLinks,
+		"trusted_proxy_hops", httpmwCfg.TrustedProxyHops,
+		"log_level", logCfg.Level,
+	)
+
+	// Setup pyroscope profiling early so we get profiles from the entire app lifetime
+	profOpts := profCfg.ToOptions()
+	profOpts.AppName = v.AppName
+	profOpts.Tags = map[string]string{
+		"app":       v.AppName,
+		"component": v.Component,
+		"version":   vi.Version,
+		"commit":    vi.Commit,
+		"build_id":  vi.BuildId,
+		"source":    "lmlabs-go-agent",
+	}
+	// Start profiling, returns a stop function to call for clean shutdown (flush buffers, etc)
+	stopProf, profErr := prof.Start(ctx, profOpts)
+	if profErr != nil {
+		L.Error(ctx, profErr, "pyroscope start failed", "pyro_server", profCfg.PyroServer)
+	}
+	var stopProfOnce sync.Once
+	callStopProf := func() { stopProfOnce.Do(stopProf) }
+	defer callStopProf()
+
+	// Setup otel for tracing
+	traceOpts := traceCfg.ToOptions()
+	traceOpts.Service = v.AppName
+	traceOpts.Component = v.Component
+	traceOpts.Version = v.Version
+
+	// Start otel, returns a shutdown function to call for clean shutdown (flush buffers, etc)
+	shutdownOtelx, err := otelx.Init(ctx, traceOpts)
+	if err != nil {
+		L.Error(ctx, err, "otel init failed")
+	}
+	if shutdownOtelx != nil {
+		defer func() { _ = shutdownOtelx(context.Background()) }()
+	}
+
+	// wrap otel tracer provider with pyroscope tracer provider, this tags spans with pyroscope profile id and allows pyroscope to correlate traces and profiles in the ui.
+	if profErr == nil && profCfg.EnablePyroscope {
+		L.Info(ctx, "otel pyroscope tracer provider enabled", "pyro_server", profCfg.PyroServer)
+
+		tp := otel.GetTracerProvider()
+		otel.SetTracerProvider(otelpyroscope.NewTracerProvider(
+			tp,
+			otelpyroscope.WithAppName("trust-portal"),
+			otelpyroscope.WithPyroscopeURL(profCfg.PyroServer),
+		))
+	}
+
+	// Setup metrics, we use our own metrics package for internal instrumentation
+	var m = metrics.New()
+	m.SetBuildInfoFromVersion(v.AppName, "server", &vi)
+	m.SetProfilingActive(profErr == nil && profCfg.EnablePyroscope)
+
+	// setup toggle for server shutdown. this is used to fail readiness checks
+	// during shutdown to drain connections from load balancer before killing the process.
+	var shutdownGate health.ShutdownGate
+
+	// setup readiness checks, currently just the shutdown gate
+	readiness := health.All(
+		shutdownGate.Probe(),
+	)
+	// liveness is always true if the app is able to respond
+	liveness := health.Fixed(true, "")
+
+	// Configure ops http server for metrics, health checks, pprof, etc
+	opsOpts := opsCfg.ToOptions()
+	opsOpts.Metrics = m.Handler()
+	opsOpts.Health = liveness
+	opsOpts.Readiness = readiness
+	opsOpts.UseRecoverMW = true
+	opsOpts.OnPanic = m.IncHttpPanic
+
+	// start admin/ops listener. sg restricts inbound to internal monitoring infrastructure.
+	// we reject connections from public ips and requests with x-forwarded set in middleware
+	// to prevent accidental exposure if sg is misconfigured or load balancer ever sends traffic here
+	opsHTTPStop, err := opshttp.Start(ctx, L, opsOpts)
+	if err != nil {
+		L.Error(ctx, err, "failed to start ops http listener")
+		return err
+	}
+	defer func() {
+		err := opsHTTPStop(context.Background())
+		if err != nil {
+			L.Error(ctx, err, "failed to stop ops http listener")
+		}
+	}()
+
+	// setup main api chi router and middleware stack
+	r := chi.NewRouter()
+
+	// Compress text responses
+	r.Use(middleware.Compress(5, "application/json", "text/html", "image/svg+xml", "application/x-pem-file"))
+
+	// Annotate logger (and tracer if trace is recording) with http.route from chi route pattern
+	r.Use(httpmw.AnnotateHTTPRoute)
+
+	// Access log middleware
+	r.Use(httpmw.AccessLog())
+
+	// Limit request body size, this is a wrapper around http.MaxBytesHandler which returns 413 if limit is exceeded
+	r.Use(httpmw.MaxBody(1024 * 64)) // 64KB
+
+	// add health check endpoints to main listener
+	r.Get("/-/healthy", health.HealthzHandler(liveness))
+	r.Get("/-/ready", health.ReadyzHandler(readiness))
+
+	// register api routes
+	tpHTTP := trustportal.New(L, "./data")
+	r.Group(func(r chi.Router) {
+		tpHTTP.RegisterRoutes(r)
+	})
+
+	// middleware stack for main listener, order matters these are wrappers, outermost sees raw request
+	// first and is last to see response, innermost is last to see request and first to see response but
+	// has access to the full rich context from outer middleware and handlers
+	var h http.Handler = r
+
+	// Request-scoped logging (inner so it sees trace_id, chi route, etc)
+	h = httpmw.WithLogger(L)(h)
+
+	// add trace-id and span-id headers to any requests with a recording trace
+	h = httpmw.TraceResponseHeaders("X-Trace-Id", "X-Span-Id")(h)
+
+	// otel instrumentation for automatic spans and trace context propagation
+	h = otelhttp.NewHandler(h, "http.server",
+		otelhttp.WithFilter(func(r *http.Request) bool {
+			// dont trace health/readiness checks
+			return r.URL.Path != "/-/healthy" && r.URL.Path != "/-/ready"
+		}),
+		// AnnotateHTTPRoute will rename the span later to the final route pattern
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			return r.Method + " " + r.URL.Path
+		}),
+		// WithPublicEndpointFn is the replacement for WithPublicEndpoint()
+		otelhttp.WithPublicEndpointFn(func(_ *http.Request) bool { return true }),
+	)
+
+	// Metrics middleware for prometheus instrumentation
+	h = m.Middleware(h)
+
+	// Client IP resolution and spoofing protection middleware, outer so downstream middleware
+	// and handlers can use the resolved client ip from context for consistency and security
+	h = httpmw.ClientIPWithOptions(httpmw.ClientIPOptions{
+		TrustedHops: httpmwCfg.TrustedProxyHops,
+	})(h)
+
+	// Request ID (outer so everything downstream sees it)
+	h = httpmw.RequestID("X-Request-Id")(h) // request ID
+
+	// Recovery middleware to recover and log panics and serve 500 response.
+	// Outer to catch panics from any downstream middleware or handlers
+	h = httpmw.Recover(L, nil)(h)
+
+	// Security headers outermost to ensure they are served on every response
+	h = httpmw.SecurityHeaders(h)
+
+	// Configure http server options from config
+	tpHTTPOpts, err := httpCfg.ToOptions()
+	if err != nil {
+		L.Error(ctx, err, "invalid http config")
+		return err
+	}
+
+	// Start trust HTTP server with middleware and handlers
+	tpHTTPStop, err := httpserver.Start(ctx, fmt.Sprintf(":%d", appCfg.HTTPPort), h, L, tpHTTPOpts)
+	if err != nil {
+		L.Error(ctx, err, "failed to start trust http listener")
+		return err
+	}
+	defer func() {
+		err := tpHTTPStop(context.Background())
+		if err != nil {
+			L.Error(ctx, err, "failed to stop trust http listener")
+		}
+	}()
+
+	// Notify systemd that we started successfully if started under systemd
+	if err := notifySystemd(); err != nil {
+		// log and dont exit, worst case systemd will kill the process after timeout
+		L.Warn(ctx, "failed to notify systemd of readiness", "error", err)
+	}
+
+	// Wait for ctrl+c / sigterm
+	<-ctx.Done()
+
+	L.Info(context.Background(), "shutdown signal received")
+
+	// fail health checks to drain connections
+	shutdownGate.Set("draining")
+	L.Info(context.Background(), "shutdown gate closed")
+
+	// Wait for in-flight requests to finish and for load balancer
+	// to detect unhealthy and stop sending new requests.
+	drainDuration := time.Duration(appCfg.DrainSeconds) * time.Second
+	L.Info(context.Background(), "sleeping for drain period", "drain_seconds", appCfg.DrainSeconds)
+	forceCh := make(chan os.Signal, 1)
+	signal.Notify(forceCh, os.Interrupt, syscall.SIGTERM)
+	select {
+	case <-time.After(drainDuration):
+		L.Info(context.Background(), "drain period complete")
+	case <-forceCh:
+		L.Warn(context.Background(), "second signal received, skipping drain")
+	}
+	signal.Stop(forceCh)
+
+	// Shutdown components with per-component budget sliced from total.
+	// stopProf is synchronous and needs no context, so it's excluded.
+	type stopFn struct {
+		name string
+		fn   func(context.Context) error
+	}
+	stopFns := []stopFn{
+		{"trust http server", tpHTTPStop},
+		{"ops http server", opsHTTPStop},
+		{"otel", shutdownOtelx},
+	}
+
+	budget := time.Duration(appCfg.ShutdownBudgetSeconds) * time.Second
+	perComponent := budget / time.Duration(len(stopFns))
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+
+	for _, s := range stopFns {
+		cctx, ccancel := context.WithTimeout(shutdownCtx, perComponent)
+		if err := s.fn(cctx); err != nil {
+			L.Error(context.Background(), err, s.name+" shutdown")
+		}
+		ccancel()
+	}
+
+	callStopProf()
+
+	L.Info(context.Background(), "shutdown complete")
+	return nil
+}
+
+func notifySystemd() error {
+	// systemd will set NOTIFY_SOCKET to a unix socket path if we were started under systemd with type=notify
+	addr := os.Getenv("NOTIFY_SOCKET")
+	if addr == "" {
+		return nil
+	}
+	conn, err := net.Dial("unixgram", addr) //nolint:gosec,noctx // G704: addr is from NOTIFY_SOCKET set by systemd not user input, no context support in net package for unixgram sockets
+	if err != nil {
+		return fmt.Errorf("systemd notify failed: dial failed: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.Write([]byte("READY=1")); err != nil {
+		return fmt.Errorf("systemd notify failed: write failed: %w", err)
+	}
+	return nil
+}

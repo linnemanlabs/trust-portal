@@ -1,0 +1,38 @@
+.PHONY: build run test fuzz cover clean release lint bench vet check tidy
+
+build:
+	go build -o trust-portal ./cmd/trust-portal
+
+run: build
+	./trust-portal
+
+test:
+	go test -race -count=1 ./...
+
+vet:
+	go vet ./...
+
+fuzz:
+	go test -fuzz=FuzzValidate -fuzztime=30s ./internal/cfg/
+
+lint:
+	golangci-lint cache clean
+	golangci-lint run ./...
+
+cover:
+	go test -race -count=1 -coverprofile=coverage.out -coverpkg=./internal/... ./...
+	go tool cover -func=coverage.out
+	@go tool cover -func=coverage.out | awk '/^total:/ { gsub(/%/, "", $$NF); if ($$NF+0 < 60) { printf "FAIL: total coverage %s%% is below threshold 60%%\n", $$NF; exit 1 } else { printf "OK: total coverage %s%% meets threshold 60%%\n", $$NF } }'
+	@rm coverage.out
+
+clean:
+	rm -rf trust-portal coverage.out
+
+tidy:
+	go mod tidy
+	git diff --exit-code go.mod go.sum
+
+check: tidy vet lint cover
+
+release:
+	/build-system/build.sh --repo . --ref HEAD --track stable

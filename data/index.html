@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LinnemanLabs Trust Portal</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+</head>
+
+<body>
+    <h1>LinnemanLabs Trust Portal</h1>
+    <p>Public trust material for LinnemanLabs infrastructure.</p>
+
+    <h2>Trust Root</h2>
+    <p><a href="/.well-known/trusted_root.json">trusted_root.json</a> - Sigstore trusted root for verification</p>
+
+    <h2>Certificates</h2>
+    <ul>
+        <li><a href="/certs/root-ca.crt">Root CA</a></li>
+        <li><a href="/certs/fulcio-ca.crt">Fulcio CA</a></li>
+        <li><a href="/certs/spire-ca.crt">SPIRE CA</a></li>
+        <li><a href="/certs/tsa.crt">TSA</a></li>
+    </ul>
+
+    <h2>Public Keys</h2>
+    <ul>
+        <li><a href="/keys/rekor-checkpoint.pub">Rekor Checkpoint Signing Key</a></li>
+        <li><a href="/keys/tesseract-checkpoint.pub">TesseraCT Checkpoint Signing Key</a></li>
+    </ul>
+
+    <h2>Policy</h2>
+    <p><a href="/cps">Certificate Practice Statement</a></p>
+</body>
+
+</html>

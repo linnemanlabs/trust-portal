@@ -1,0 +1,63 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+linters:
+  enable:
+    - gosec
+    - errcheck
+    - exhaustive
+    - govet
+    - staticcheck
+    - unused
+    - gocritic
+    - gocognit
+    - prealloc
+    - unconvert
+    - unparam
+    - misspell
+    - revive
+    - bodyclose
+    - noctx
+    - errorlint
+    - nilerr
+    - goconst
+    - thelper
+    - usestdlibvars
+    - reassign
+    - ineffassign
+    - dupl
+    - nolintlint
+    - copyloopvar
+    - spancheck
+    - sloglint
+    - fatcontext
+    - promlinter
+    - gosmopolitan
+    - nosprintfhostport
+    - makezero
+    - protogetter
+    - errname
+  exclusions:
+    rules: []
+          
+  settings:
+    gosec:
+      excludes: []
+    gocognit:
+      min-complexity: 25
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
