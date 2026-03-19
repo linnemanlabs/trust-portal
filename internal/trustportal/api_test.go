@@ -115,8 +115,7 @@ func TestRoutes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, tt.path, http.NoBody)
-			req = req.WithContext(context.Background())
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tt.path, http.NoBody)
 			w := httptest.NewRecorder()
 
 			r.ServeHTTP(w, req)
@@ -145,7 +144,7 @@ func TestRoutes_NotFound(t *testing.T) {
 	r := chi.NewRouter()
 	h.RegisterRoutes(r)
 
-	req := httptest.NewRequest(http.MethodGet, "/nonexistent", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/nonexistent", http.NoBody)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
