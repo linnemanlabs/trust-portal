@@ -1,10 +1,10 @@
 .PHONY: build run test fuzz cover clean release lint bench vet check tidy
 
 build:
-	go build -o trust-portal ./cmd/trust-portal
+	go build -o trustportal-server ./cmd/server
 
 run: build
-	./trust-portal
+	./trustportal-server
 
 test:
 	go test -race -count=1 ./...

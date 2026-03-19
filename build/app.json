@@ -20,7 +20,7 @@
 
   "components": {
     "server": {
-      "go_package": "./cmd/trustportal",
+      "go_package": "./cmd/server",
       "repository": "trustportal/server",
       "artifact_type": "application/vnd.phxi.binary.v1"
     }
