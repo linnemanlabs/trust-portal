@@ -34,6 +34,7 @@ import (
 	"github.com/linnemanlabs/go-core/otelx"
 	v "github.com/linnemanlabs/go-core/version"
 
+	"github.com/linnemanlabs/trust-portal/data"
 	vc "github.com/linnemanlabs/trust-portal/internal/cfg"
 	"github.com/linnemanlabs/trust-portal/internal/trustportal"
 )
@@ -259,7 +260,7 @@ func run() error {
 	r.Get("/-/ready", health.ReadyzHandler(readiness))
 
 	// register api routes
-	tpHTTP := trustportal.New(L, "./data")
+	tpHTTP := trustportal.New(L, data.FS)
 	r.Group(func(r chi.Router) {
 		tpHTTP.RegisterRoutes(r)
 	})

@@ -3,9 +3,9 @@ package trustportal
 
 import (
 	"fmt"
+	"io/fs"
 	"net/http"
-	"os"
-	"path/filepath"
+	"path"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/linnemanlabs/go-core/log"
@@ -18,7 +18,7 @@ type Handler struct {
 }
 
 // New creates a new Handler instance, loading the required files from the specified data directory. It panics if any file fails to load.
-func New(logger log.Logger, dataDir string) *Handler {
+func New(logger log.Logger, data fs.FS) *Handler {
 	h := &Handler{
 		logger: logger,
 		files:  make(map[string][]byte),
@@ -39,12 +39,12 @@ func New(logger log.Logger, dataDir string) *Handler {
 	}
 
 	for filename := range entries {
-		// Use filepath.Join and filepath.Clean to construct a safe file path (good practice, not needed on our own map of files but satisfies gosec linter)
-		data, err := os.ReadFile(filepath.Clean(filepath.Join(dataDir, filename)))
+		// Use path.Clean to construct a safe file path (good practice, not needed on our own map of files but satisfies gosec linter)
+		content, err := fs.ReadFile(data, path.Clean(filename))
 		if err != nil {
 			panic(fmt.Sprintf("failed to load %s: %v", filename, err))
 		}
-		h.files[filename] = data
+		h.files[filename] = content
 	}
 
 	return h

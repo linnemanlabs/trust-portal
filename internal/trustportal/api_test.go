@@ -2,11 +2,12 @@ package trustportal
 
 import (
 	"context"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
+	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/linnemanlabs/go-core/log"
@@ -22,40 +23,27 @@ func testLogger(t *testing.T) log.Logger {
 	return lg
 }
 
-// setupTestData creates a temporary data directory with all required files.
-func setupTestData(t *testing.T) string {
+// setupTestData returns an in-memory fs.FS with all required trust portal files.
+func setupTestData(t *testing.T) fs.FS {
 	t.Helper()
-	dir := t.TempDir()
-
-	files := map[string]string{
-		"index.html":                    "<html><body>index</body></html>",
-		"favicon.svg":                   "<svg></svg>",
-		"cps.html":                      "<html><body>cps</body></html>",
-		"trusted_root.json":             `{"mediaType":"application/vnd.dev.sigstore.trustedroot+json;version=0.1"}`,
-		"signing-config.json":           `{"mediaType":"application/vnd.dev.sigstore.signingconfig+json;version=0.2"}`,
-		"certs/root-ca.crt":             "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
-		"certs/fulcio-ca.crt":           "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
-		"certs/spire-ca.crt":            "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
-		"certs/tsa.crt":                 "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
-		"keys/rekor-checkpoint.pub":     "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----\n",
-		"keys/tesseract-checkpoint.pub": "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----\n",
+	return fstest.MapFS{
+		"index.html":                    {Data: []byte("<html><body>index</body></html>")},
+		"favicon.svg":                   {Data: []byte("<svg></svg>")},
+		"cps.html":                      {Data: []byte("<html><body>cps</body></html>")},
+		"trusted_root.json":             {Data: []byte(`{"mediaType":"application/vnd.dev.sigstore.trustedroot+json;version=0.1"}`)},
+		"signing-config.json":           {Data: []byte(`{"mediaType":"application/vnd.dev.sigstore.signingconfig+json;version=0.2"}`)},
+		"certs/root-ca.crt":             {Data: []byte("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n")},
+		"certs/fulcio-ca.crt":           {Data: []byte("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n")},
+		"certs/spire-ca.crt":            {Data: []byte("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n")},
+		"certs/tsa.crt":                 {Data: []byte("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n")},
+		"keys/rekor-checkpoint.pub":     {Data: []byte("-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----\n")},
+		"keys/tesseract-checkpoint.pub": {Data: []byte("-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----\n")},
 	}
-
-	for name, content := range files {
-		path := filepath.Join(dir, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
-	}
-	return dir
 }
 
 func TestNew_LoadsAllFiles(t *testing.T) {
-	dir := setupTestData(t)
-	h := New(testLogger(t), dir)
+	data := setupTestData(t)
+	h := New(testLogger(t), data)
 
 	expected := []string{
 		"index.html", "favicon.svg", "cps.html",
@@ -75,21 +63,19 @@ func TestNew_LoadsAllFiles(t *testing.T) {
 }
 
 func TestNew_PanicsOnMissingFile(t *testing.T) {
-	dir := t.TempDir() // empty directory, no files
-
 	defer func() {
 		if r := recover(); r == nil {
 			t.Error("expected panic on missing files, got nil")
 		}
 	}()
 
-	New(testLogger(t), dir)
+	New(testLogger(t), fstest.MapFS{})
 }
 
 func TestRoutes(t *testing.T) {
-	dir := setupTestData(t)
+	data := setupTestData(t)
 	lg := testLogger(t)
-	h := New(lg, dir)
+	h := New(lg, data)
 
 	r := chi.NewRouter()
 	h.RegisterRoutes(r)
@@ -130,7 +116,7 @@ func TestRoutes(t *testing.T) {
 			}
 
 			body := w.Body.String()
-			if tt.wantContain != "" && !contains(body, tt.wantContain) {
+			if tt.wantContain != "" && !strings.Contains(body, tt.wantContain) {
 				t.Errorf("body does not contain %q, got %q", tt.wantContain, body)
 			}
 		})
@@ -138,8 +124,8 @@ func TestRoutes(t *testing.T) {
 }
 
 func TestRoutes_NotFound(t *testing.T) {
-	dir := setupTestData(t)
-	h := New(testLogger(t), dir)
+	data := setupTestData(t)
+	h := New(testLogger(t), data)
 
 	r := chi.NewRouter()
 	h.RegisterRoutes(r)
@@ -151,17 +137,4 @@ func TestRoutes_NotFound(t *testing.T) {
 	if w.Code != http.StatusNotFound && w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 404 or 405", w.Code)
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
-}
-
-func searchString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
