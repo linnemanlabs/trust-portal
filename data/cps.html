@@ -27,7 +27,7 @@
   <h2>3. Key Management</h2>
   <p>Root CA private key generated on air-gapped system, stored on hardware security token (YubiKey), duplicate backup
     stored in separate physical location. Private key never exists on networked systems.</p>
-  <p>Fulcio and TSA intermediate CA private keys are non-exportable in AWS KMS. All signing operations occur via KMS API
+  <p>Fulcio CA and TSA timestamp private keys are non-exportable in AWS KMS. All signing operations occur via KMS API
     calls.</p>
   <p>SPIRE upstream CA private key is stored in AWS Secrets Manager with IAM access controls and CloudTrail audit
     logging. SPIRE operational signing keys are non-exportable in AWS KMS.</p>
