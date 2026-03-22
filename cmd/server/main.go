@@ -395,10 +395,8 @@ func notifySystemd() error {
 	if addr == "" {
 		return nil
 	}
-	conn, err := net.Dial("unixgram", addr) //nolint:gosec,noctx // G704: addr is from NOTIFY_SOCKET set by systemd not user input, no context support in net package for unixgram sockets
-	if err != nil {
-		return fmt.Errorf("systemd notify failed: dial failed: %w", err)
-	}
+	// we ignore the error here in case not running under systemd in containers etc, systemd will log and kill the process after a timeout if the notify fails
+	conn, _ := net.Dial("unixgram", addr) //nolint:gosec,noctx // G704: addr is from NOTIFY_SOCKET set by systemd not user input, no context support in net package for unixgram sockets
 	defer func() { _ = conn.Close() }()
 	if _, err := conn.Write([]byte("READY=1")); err != nil {
 		return fmt.Errorf("systemd notify failed: write failed: %w", err)
