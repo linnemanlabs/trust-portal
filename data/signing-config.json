@@ -10,16 +10,6 @@
       "operator": "linnemanlabs.com"
     }
   ],
-  "oidcUrls": [
-    {
-      "url": "https://oauth2.sigstore.dev/auth",
-      "majorApiVersion": 1,
-      "validFor": {
-        "start": "2022-04-13T20:06:15.000Z"
-      },
-      "operator": "sigstore.dev"
-    }
-  ],
   "rekorTlogUrls": [
     {
       "url": "https://rekor.trust.linnemanlabs.com/",
