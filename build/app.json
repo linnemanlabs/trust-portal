@@ -10,7 +10,7 @@
   },
 
   "oci": {
-    "registry": "682033464915.dkr.ecr.us-east-2.amazonaws.com",
+    "registry": "148142827637.dkr.ecr.us-east-2.amazonaws.com",
     "repository_prefix": "trustportal",
     "artifact_types": {
       "binary": "application/vnd.phxi.binary.v1",
@@ -27,17 +27,17 @@
   },
 
   "deploy": {
-    "s3_bucket": "phxi-build-prod-use2-deployment-artifacts",
+    "s3_bucket": "phxi-prod-use2-build-deployment-artifacts",
     "ssm_release_param": "/app/trustportal/server/deploy/stable/release/id"
   },
 
   "evidence": {
-    "s3_bucket": "phxi-build-prod-use2-deployment-artifacts"
+    "s3_bucket": "phxi-prod-use2-build-deployment-artifacts"
   },
 
   "aws": {
     "ssm_env_param": "/platform/env/name",
-    "ssm_cosign_signer_param": "arn:aws:ssm:us-east-2:987020212918:parameter/app/trustportal/signing/cosign/signer"
+    "ssm_cosign_signer_param": "arn:aws:ssm:us-east-2:242777378327:parameter/app/trustportal/signing/cosign/signer"
   },
 
   "policy": {
