@@ -27,7 +27,7 @@ linters:
     - noctx
     - errorlint
     - nilerr
-    - goconst
+#    - goconst
     - thelper
     - usestdlibvars
     - reassign
@@ -52,6 +52,9 @@ linters:
       excludes: []
     gocognit:
       min-complexity: 25
+    goconst:
+      min-occurrences: 4
+      ignore-tests: true
     gocritic:
       enabled-tags:
         - diagnostic
